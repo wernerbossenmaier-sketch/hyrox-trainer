@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#14171A"/>
+  <text x="256" y="232" text-anchor="middle"
+        font-family="-apple-system, Helvetica, Arial, sans-serif"
+        font-size="190" font-weight="800" letter-spacing="-6" fill="#C8F02D">HX</text>
+  <!-- barbell -->
+  <g fill="#C8F02D">
+    <rect x="148" y="332" width="216" height="14" rx="7"/>      <!-- bar -->
+    <rect x="168" y="300" width="22" height="80" rx="6"/>        <!-- left inner plate -->
+    <rect x="322" y="300" width="22" height="80" rx="6"/>        <!-- right inner plate -->
+    <rect x="140" y="312" width="16" height="56" rx="5"/>        <!-- left outer plate -->
+    <rect x="356" y="312" width="16" height="56" rx="5"/>        <!-- right outer plate -->
+  </g>
+  <text x="256" y="430" text-anchor="middle"
+        font-family="-apple-system, Helvetica, Arial, sans-serif"
+        font-size="46" font-weight="700" letter-spacing="8" fill="#8A949E">HYROX</text>
+</svg>
