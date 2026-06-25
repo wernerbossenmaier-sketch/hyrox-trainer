@@ -172,6 +172,17 @@
   .foot{color:var(--faint);font-size:11px;text-align:center;padding:8px 16px 0;line-height:1.5}
   .toggle{font-family:var(--mono);font-size:12px;color:var(--accent);cursor:pointer;user-select:none}
 
+  /* Save toast */
+  .toast{position:fixed;left:50%;bottom:calc(var(--safe-b) + 84px);transform:translateX(-50%) translateY(8px);
+    background:var(--accent);color:var(--accent-ink);font-family:var(--mono);font-weight:700;font-size:13px;
+    letter-spacing:.03em;padding:10px 16px;border-radius:10px;z-index:40;opacity:0;pointer-events:none;
+    transition:opacity .18s,transform .18s;box-shadow:0 8px 24px rgba(0,0,0,.45);max-width:80vw;text-align:center}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast.warn{background:var(--warn)}
+  .shealth{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:middle;background:var(--faint)}
+  .shealth.ok{background:var(--ok)}
+  .shealth.warn{background:var(--warn)}
+
   /* Tab bar */
   nav{position:fixed;bottom:0;left:0;right:0;z-index:20;background:rgba(20,23,26,.94);
     backdrop-filter:saturate(140%) blur(8px);border-top:1px solid var(--line);
@@ -219,6 +230,60 @@ const Store = (() => {
 })();
 const KEY="hyrox_v1";
 
+/* ---------- durability layer: IndexedDB mirror + persistent-storage request ----------
+   iOS may evict localStorage (~7-day rule / storage pressure). We (1) ask the OS to keep
+   our data with navigator.storage.persist(), and (2) mirror every save into IndexedDB,
+   then on launch adopt whichever copy has MORE log entries — so a partial wipe self-heals. */
+const storageState = { local: Store.persistent, persisted: null };
+
+const IDB = (() => {
+  const DB="hyrox", ST="kv"; let dbp=null;
+  function open(){
+    if(dbp) return dbp;
+    dbp = new Promise((res,rej)=>{
+      let r; try{ r=indexedDB.open(DB,1); }catch(e){ return rej(e); }
+      r.onupgradeneeded=()=>{ try{ r.result.createObjectStore(ST); }catch(e){} };
+      r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);
+    }).catch(()=>null);
+    return dbp;
+  }
+  return {
+    async get(k){ const db=await open(); if(!db) return null;
+      return new Promise(res=>{ try{ const q=db.transaction(ST,"readonly").objectStore(ST).get(k);
+        q.onsuccess=()=>res(q.result==null?null:q.result); q.onerror=()=>res(null); }catch(e){ res(null); } }); },
+    async set(k,v){ const db=await open(); if(!db) return;
+      return new Promise(res=>{ try{ const q=db.transaction(ST,"readwrite").objectStore(ST).put(v,k);
+        q.onsuccess=()=>res(); q.onerror=()=>res(); }catch(e){ res(); } }); }
+  };
+})();
+
+async function requestPersistence(){
+  try{
+    if(navigator.storage && navigator.storage.persisted){
+      let p = await navigator.storage.persisted();
+      if(!p && navigator.storage.persist) p = await navigator.storage.persist();
+      storageState.persisted = !!p;
+    }
+  }catch(e){ storageState.persisted = null; }
+}
+
+async function recoverFromIDB(){
+  try{
+    const raw = await IDB.get(KEY);
+    if(raw==null){ if((state.log||[]).length) IDB.set(KEY, JSON.stringify(state)); return; }
+    const idb = JSON.parse(raw);
+    const here = (state.log||[]).length, there = (idb.log||[]).length;
+    if(there > here){                 // localStorage was (partially) cleared — restore fuller copy
+      state = Object.assign(structuredClone(DEFAULT), idb);
+      Store.set(KEY, JSON.stringify(state));
+      render();
+      toast("Recovered "+there+" saved entries", false);
+    } else if(here > there){          // IDB behind — push the on-device copy into it
+      IDB.set(KEY, JSON.stringify(state));
+    }
+  }catch(e){}
+}
+
 /* ---------- state ---------- */
 const DEFAULT={ week:1, log:[], checks:{day1:{},day2:{},day3:{}} };
 let state = load();
@@ -226,7 +291,7 @@ function load(){
   try{ const raw=Store.get(KEY); if(raw){ return Object.assign(structuredClone(DEFAULT), JSON.parse(raw)); } }catch(e){}
   return structuredClone(DEFAULT);
 }
-function save(){ Store.set(KEY, JSON.stringify(state)); }
+function save(){ const json=JSON.stringify(state); Store.set(KEY, json); IDB.set(KEY, json); }
 
 /* ---------- plan DATA (source of truth) ---------- */
 const STATIONS=[
@@ -271,6 +336,14 @@ const DAY3_CIRCUIT=[
 let activeTab="week";
 const $=s=>document.querySelector(s);
 const el=(t,c,h)=>{const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
+let _toastT=null;
+function toast(msg,warn){
+  let t=document.getElementById("toast");
+  if(!t){ t=el("div","toast"); t.id="toast"; document.body.appendChild(t); }
+  t.textContent=msg; t.classList.toggle("warn",!!warn);
+  requestAnimationFrame(()=>t.classList.add("show"));
+  clearTimeout(_toastT); _toastT=setTimeout(()=>t.classList.remove("show"),1700);
+}
 const tick='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#14171A" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
 function fmtDate(ts){const d=new Date(ts);return d.toLocaleDateString(undefined,{day:"2-digit",month:"short"});}
 function isDeload(){return state.week===4;}
@@ -291,10 +364,12 @@ function logLift(lift,weight,stall){
   if(!(weight>0))return;
   state.log.push({id:Date.now()+Math.random(),ts:Date.now(),kind:"lift",lift,weight:+weight,stall:!!stall});
   save();render();
+  toast((stall?"Held ":"Saved ")+(+weight)+" kg ✓", stall);
 }
 function logSession(day,rpe){
   state.log.push({id:Date.now()+Math.random(),ts:Date.now(),kind:"session",day,rpe:rpe||null});
   save();render();
+  toast("Session logged ✓");
 }
 function toggleCheck(day,key){
   state.checks[day]=state.checks[day]||{};
@@ -556,7 +631,12 @@ function viewStats(){
   }
   m.appendChild(cc);
 
-  m.appendChild(el("p","foot",(Store.persistent?"Saved on this device.":"Preview mode — data is in memory only here; it persists on your phone.")+" Use Export for a durable backup."));
+  const durDot = storageState.persisted===true?"ok":storageState.persisted===false?"warn":"";
+  const durTxt = storageState.persisted===true?"Durable storage ON — protected from auto-clear."
+               :storageState.persisted===false?"Durable storage not granted — Export weekly as a safety net."
+               :"Checking durable storage…";
+  const baseTxt = Store.persistent?"Saved on this device + IndexedDB backup. ":"Preview mode — in-memory only here; it persists on your phone. ";
+  m.appendChild(el("p","foot",`<span class="shealth ${durDot}"></span>${baseTxt}${durTxt} Use Export for an off-device backup.`));
   return m;
 }
 
@@ -616,6 +696,9 @@ $("#fileImport").onchange=e=>{
 };
 
 render();
+/* durability: ask OS to keep our data, then self-heal from IndexedDB if local was cleared */
+requestPersistence().then(()=>{ if(activeTab==="stats") renderTab(); });
+recoverFromIDB();
 </script>
 </body>
 </html>
